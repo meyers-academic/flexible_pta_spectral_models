@@ -9,6 +9,7 @@ import scipy.linalg as sl
 from scipy.special import logsumexp
 import jax.debug
 from interpax import interp1d
+import transformations
 
 def create_amatrix(npoints, logf, cond=1e-5):
     """Create inverse of A matrix for inverting linear interpolation.
@@ -247,7 +248,7 @@ def create_rn_single_psr_spline_model(psr, n_rn_frequencies, n_knots):
 
     return model, psrl
 
-def create_rn_pta_model(psrs, n_rn_frequencies, outliers=False, cond=1e-5):
+def create_rn_pta_model(psrs, n_rn_frequencies, cond=1e-5, array=False):
     """Create numpyro model for sampling and likelihood for full PTA. The intrinsic red noise and the GW
     are both modeled with the inverted interpolation model (using lncass for interpolation) combined with
     outliers (with lncass used to determine whether outliers are neded).
@@ -272,7 +273,16 @@ def create_rn_pta_model(psrs, n_rn_frequencies, outliers=False, cond=1e-5):
     Tspan = ds.getspan(psrs)
     npsrs = len(psrs)
     # create PTA model
-    gl = ds.GlobalLikelihood([ds.PulsarLikelihood([psrs[ii].residuals,
+    if array:
+        gl = ds.ArrayLikelihood((ds.PulsarLikelihood([psr.residuals,
+                                                    ds.makenoise_measurement(psr, psr.noisedict),
+                                                    ds.makegp_ecorr(psr, psr.noisedict),
+                                                    ds.makegp_timing(psr, svd=True, constant=1e-6)]) for psr in psrs),
+                              ds.makecommongp_fourier(psrs, ds.makefreespectrum_crn(n_rn_frequencies),
+                                                 components={'log10_rho': n_rn_frequencies, 'crn_log10_rho': n_rn_frequencies},
+                                                 T=Tspan, name='red_noise', common=['crn_log10_rho']))
+    else:
+        gl = ds.GlobalLikelihood([ds.PulsarLikelihood([psrs[ii].residuals,
                             ds.makenoise_measurement(psrs[ii], psrs[ii].noisedict),
                             ds.makegp_ecorr(psrs[ii], psrs[ii].noisedict),
                             ds.makegp_timing(psrs[ii]),
@@ -287,6 +297,7 @@ def create_rn_pta_model(psrs, n_rn_frequencies, outliers=False, cond=1e-5):
 
     # Precompute A and its inverse
     Ai, b_0_coeff, b_last_coeff = create_amatrix(npoints_interp, logf, cond=cond)
+    logL = transformations.simple_dict_transformation(gl.logL)
 
 
     def model(prior_dict=PRIOR_DICT, rng_key=None):
@@ -319,9 +330,8 @@ def create_rn_pta_model(psrs, n_rn_frequencies, outliers=False, cond=1e-5):
         log10_rho = numpyro.deterministic("log10_rho",
                                           jnp.clip(jnp.vstack([jnp.atleast_1d(log_10_rho_0), log10_rho_prime, jnp.atleast_1d(log_10_rho_last)]),
                                                   -15, -4))
-        resdict = {f'{psr.name}_red_noise_log10_rho({n_rn_frequencies})': log10_rho[:, ii] for ii, psr in enumerate(psrs)}
-        resdict[f'gw_log10_rho({n_rn_frequencies})'] = log10_rho[:, -1]
-        numpyro.factor("ll", gl.logL(resdict))
+        # resdict = {f'{psr.name}_red_noise_log10_rho({n_rn_frequencies})': log10_rho[:, ii] 
+        numpyro.factor("ll", logL(log10_rho))
 
     return model, gl
 
@@ -337,7 +347,6 @@ def create_pta_model_plrn_fsgw(psrs, n_rn_frequencies, outliers=False, cond=1e-5
                             ds.makegp_fourier(psrs[ii], ds.powerlaw, n_rn_frequencies, T=Tspan, name='red_noise'),
                             ds.makegp_fourier(psrs[ii], ds.freespectrum, n_rn_frequencies, T=Tspan, name='gw', common=['gw_log10_rho'])
                             ]) for ii in range(len(psrs))])
-
 
     def model(prior_dict=PRIOR_DICT, rng_key=None):
         """numpyro model
@@ -376,6 +385,9 @@ def create_pta_model_plrn_plgw(psrs, n_rn_frequencies, outliers=False, cond=1e-5
                                                 ds.makegp_ecorr(psr, psr.noisedict),
                                                 ds.makegp_timing(psr, svd=True, constant=1e-6)]) for psr in psrs),
                             ds.makecommongp_fourier(psrs, ds.makepowerlaw_crn(30), 30, T=Tspan, common=['crn_log10_A', 'crn_gamma'], name='red_noise', vector=False))
+    
+    # makes things faster on GPU...not sure why
+    logL = transformations.simple_dict_transformation(gl.logL)
 
 
     def model(prior_dict=PRIOR_DICT, rng_key=None):
@@ -392,10 +404,6 @@ def create_pta_model_plrn_plgw(psrs, n_rn_frequencies, outliers=False, cond=1e-5
         # rn A and Gamma
         log10_A_rn = numpyro.sample("log10_A_rn", dist.Uniform(-20, -11).expand([npsrs+1]), rng_key=rng_key)
         gamma_rn = numpyro.sample("log10_gamma_rn", dist.Uniform(0, 7).expand([npsrs+1]), rng_key=rng_key)
-        resdict_log10_A = {f'{psr.name}_red_noise_log10_A': log10_A_rn[ii] for ii, psr in enumerate(psrs)}
-        resdict_gamma = {f'{psr.name}_red_noise_gamma': gamma_rn[ii] for ii, psr in enumerate(psrs)}
-        resdict = {**resdict_log10_A, **resdict_gamma}
-        resdict[f'crn_log10_A'] = log10_A_rn[-1]
-        resdict[f'crn_gamma'] = gamma_rn[-1]
-        numpyro.factor("ll", gl.logL(resdict))
+        params = jnp.atleast_2d(jnp.array([[g, a] for g,a in zip(gamma_rn, log10_A_rn)]).flatten())
+        numpyro.factor("ll", logL(params))
     return model, gl

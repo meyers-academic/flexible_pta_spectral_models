@@ -1,0 +1,1 @@
+../../../nanograv_data/12p5_data/channelized_12p5yr_v3_full_noisedict.json

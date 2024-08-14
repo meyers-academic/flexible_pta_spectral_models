@@ -10,9 +10,7 @@ os.environ['XLA_FLAGS'] = "--xla_force_host_platform_device_count=4"
 # from transformations import logit_transformations, transformed_posterior, transformed_posterior_dict, whitening_transformation, logit_transformation_dicts
 
 def simple_dict_transformation(func):
-    """
-    Change from dictionary as input to list of arrays as input.
-    This is basically just to make it faster on a GPU.
+    """change from dictionary as input to list of arrays as input
 
     Parameters
     ----------
@@ -20,7 +18,7 @@ def simple_dict_transformation(func):
         discovery likelihood function
     """
     def to_dict(ys):
-        xs = [y for y in ys]
+        xs = [y for y in ys.T]
         return dict(zip(func.params, jnp.array(xs).T))
     def transformed(ys):
         return func(to_dict(ys))

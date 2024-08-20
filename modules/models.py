@@ -81,7 +81,7 @@ def create_amatrix_no_norm(npoints, logf, cond=0):
     b_last_coeff = ((logf[-2]-logf[-3]) / (logf[-1] - logf[-3]))
     return jnp.array(Ai), jnp.array(b_0_coeff), jnp.array(b_last_coeff)
 
-def create_single_psr_freespec_model(psr, n_rn_frequencies):
+def create_single_psr_freespec_model(psr, n_rn_frequencies, tnequad=False):
     """Create a numpyro model to sample free spectral red noise for a single pulsar
 
     Parameters
@@ -101,7 +101,7 @@ def create_single_psr_freespec_model(psr, n_rn_frequencies):
     Tspan = ds.getspan([psr])
     # create PTA model
     psrl = ds.PulsarLikelihood([psr.residuals,
-                            ds.makenoise_measurement(psr, psr.noisedict),
+                            ds.makenoise_measurement(psr, psr.noisedict, tnequad=tnequad),
                             ds.makegp_ecorr(psr, psr.noisedict),
                             ds.makegp_timing(psr),
                             ds.makegp_fourier(psr, ds.freespectrum, n_rn_frequencies, T=Tspan, name='red_noise')])
@@ -147,7 +147,7 @@ def create_single_psr_powerlaw_model(psr, n_rn_frequencies):
         numpyro.factor('ll', psrl.logL({f'{psr.name}_red_noise_log10_A': log10_A, f'{psr.name}_red_noise_gamma': gamma}))
     return powerlaw_model, psrl
 
-def create_rn_single_psr_model(psr, n_rn_frequencies, outliers=False, cond=1e-5, tnequad=False):
+def create_rn_single_psr_model(psr, n_rn_frequencies, outliers=False, cond=1e-5, tnequad=False, tm_variance=None):
     """Create red noise flexible model for single pulsar
 
     Parameters
@@ -173,7 +173,7 @@ def create_rn_single_psr_model(psr, n_rn_frequencies, outliers=False, cond=1e-5,
     psrl = ds.PulsarLikelihood([psr.residuals,
                             ds.makenoise_measurement(psr, psr.noisedict, tnequad=tnequad),
                             ds.makegp_ecorr(psr, psr.noisedict),
-                            ds.makegp_timing(psr),
+                            ds.makegp_timing(psr, variance=tm_variance),
                             ds.makegp_fourier(psr, ds.freespectrum, n_rn_frequencies, T=Tspan, name='red_noise')])
 
     # number of points for interpolation
@@ -302,6 +302,53 @@ def create_rn_single_psr_model_sample_eigvecs(psr, n_rn_frequencies, outliers=Fa
 
     return model, psrl
 
+def create_lncass_dm_pl_rn_model(psr, n_rn_frequencies=30, n_dm_frequencies=30, tnequad=False, cond=0):
+    Tspan = ds.getspan([psr])
+    psrl_nodmx = ds.PulsarLikelihood([psr.residuals,
+                            ds.makenoise_measurement(psr, psr.noisedict),
+                            ds.makegp_ecorr(psr, psr.noisedict),
+                            ds.makegp_timing(psr),
+                            ds.makegp_fourier(psr, ds.powerlaw, n_rn_frequencies, T=Tspan, name='red_noise'),
+                            ds.makegp_fourier(psr, ds.freespectrum, n_dm_frequencies, T=Tspan, name='dm', fourierbasis=ds.dmfourierbasis)])
+    # number of points for interpolation
+    npoints_interp = n_dm_frequencies - 2
+    freqs = jnp.arange(1, n_dm_frequencies + 1) / Tspan
+    logf = jnp.log(freqs)
+
+    # Precompute A and its inverse
+    Ai, b_0_coeff, b_last_coeff = create_amatrix(npoints_interp, logf, cond=cond)
+    def model(prior_dict=PRIOR_DICT, rng_key=None):
+        
+        beta = sample_lncass_single_psr(npoints_interp, tag='_dm', prior_dict=prior_dict, rng_key=rng_key)
+
+        # sample first and last bins
+        log_10_rho_0 = numpyro.sample("log_10_rho_0", dist.Uniform(-15, -4), rng_key=rng_key)
+        log_10_rho_last = numpyro.sample("log_10_rho_last", dist.Uniform(-15, -4), rng_key=rng_key)
+
+        # create b vector from precomputed coefficients
+        # jax.debug.print("pre multiply")
+        b_0 = b_0_coeff * log_10_rho_0
+        b_last = b_last_coeff * log_10_rho_last
+        # jax.debug.print("hi")
+        b = jnp.vstack([b_0, jnp.zeros((npoints_interp-2, 1)), b_last])
+
+        beta_o = sample_lncass_single_psr(npoints_interp, tag="_o", prior_dict=prior_dict,
+                                          rng_key=rng_key)
+        log10_rho_prime = jnp.dot(Ai, (jnp.atleast_2d(beta).T + b)) + jnp.atleast_2d(beta_o).T
+        log10_rho = numpyro.deterministic("log10_rho",
+                                          jnp.clip(jnp.vstack([jnp.atleast_1d(log_10_rho_0), log10_rho_prime, jnp.atleast_1d(log_10_rho_last)]),
+                                                  -15, -3))
+        
+        log10_A_rn = numpyro.sample("log10_A_rn", dist.Uniform(-20, -11), rng_key=rng_key)
+        gamma_rn = numpyro.sample("gamma_rn", dist.Uniform(0, 7), rng_key=rng_key)
+        # n_earth = numpyro.sample("n_earth", dist.Uniform(0, 10), rng_key=rng_key)
+        # jax.debug.breakpoint()
+        numpyro.factor("ll", psrl_nodmx.logL({f'{psr.name}_dm_log10_rho({n_dm_frequencies})': log10_rho,
+                                              f'{psr.name}_red_noise_log10_A': log10_A_rn,
+                                              f'{psr.name}_red_noise_gamma': gamma_rn}))
+
+    return model, psrl_nodmx
+    
 
 def create_rn_single_psr_model_javier(psr, n_rn_frequencies, cond=0):
     """Create red noise flexible model for single pulsar

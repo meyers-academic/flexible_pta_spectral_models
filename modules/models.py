@@ -441,7 +441,7 @@ def create_rn_single_psr_spline_model(psr, n_rn_frequencies, n_knots):
 
     return model, psrl
 
-def create_rn_pta_model(psrs, n_rn_frequencies, cond=1e-5, array=False):
+def create_rn_pta_model(psrs, n_rn_frequencies, cond=1e-5, array=False, tnequad=False):
     """Create numpyro model for sampling and likelihood for full PTA. The intrinsic red noise and the GW
     are both modeled with the inverted interpolation model (using lncass for interpolation) combined with
     outliers (with lncass used to determine whether outliers are neded).
@@ -468,7 +468,7 @@ def create_rn_pta_model(psrs, n_rn_frequencies, cond=1e-5, array=False):
     # create PTA model
     if array:
         gl = ds.ArrayLikelihood((ds.PulsarLikelihood([psr.residuals,
-                                                    ds.makenoise_measurement(psr, psr.noisedict),
+                                                    ds.makenoise_measurement(psr, psr.noisedict, tnequad=tnequad),
                                                     ds.makegp_ecorr(psr, psr.noisedict),
                                                     ds.makegp_timing(psr, svd=True, constant=1e-6)]) for psr in psrs),
                               ds.makecommongp_fourier(psrs, ds.makefreespectrum_crn(n_rn_frequencies),
@@ -476,17 +476,7 @@ def create_rn_pta_model(psrs, n_rn_frequencies, cond=1e-5, array=False):
                                                  T=Tspan, name='red_noise', common=['crn_log10_rho']))
     else:
         gl = ds.GlobalLikelihood([ds.PulsarLikelihood([psrs[ii].residuals,
-    if array:
-        gl = ds.ArrayLikelihood((ds.PulsarLikelihood([psr.residuals,
-                                                    ds.makenoise_measurement(psr, psr.noisedict),
-                                                    ds.makegp_ecorr(psr, psr.noisedict),
-                                                    ds.makegp_timing(psr, svd=True, constant=1e-6)]) for psr in psrs),
-                              ds.makecommongp_fourier(psrs, ds.makefreespectrum_crn(n_rn_frequencies),
-                                                 components={'log10_rho': n_rn_frequencies, 'crn_log10_rho': n_rn_frequencies},
-                                                 T=Tspan, name='red_noise', common=['crn_log10_rho']))
-    else:
-        gl = ds.GlobalLikelihood([ds.PulsarLikelihood([psrs[ii].residuals,
-                            ds.makenoise_measurement(psrs[ii], psrs[ii].noisedict),
+                            ds.makenoise_measurement(psrs[ii], psrs[ii].noisedict, tnequad=tnequad),
                             ds.makegp_ecorr(psrs[ii], psrs[ii].noisedict),
                             ds.makegp_timing(psrs[ii]),
                             ds.makegp_fourier(psrs[ii], ds.freespectrum, n_rn_frequencies, T=Tspan, name='red_noise'),
@@ -527,9 +517,9 @@ def create_rn_pta_model(psrs, n_rn_frequencies, cond=1e-5, array=False):
         b_0 = b_0_coeff * log_10_rho_0
         b_last = b_last_coeff * log_10_rho_last
         b = jnp.vstack([b_0[None, :], jnp.zeros((npoints_interp-2, npsrs+1)), b_last[None, :]])
-        beta_o = sample_lncass_pta(npoints_interp, npsrs+1, tag="_o", prior_dict=prior_dict,
-                                          rng_key=rng_key)
-        log10_rho_prime = jnp.dot(Ai, (jnp.atleast_2d(beta) + b)) + jnp.atleast_2d(beta_o)
+        # beta_o = sample_lncass_pta(npoints_interp, npsrs+1, tag="_o", prior_dict=prior_dict,
+                                          # rng_key=rng_key)
+        log10_rho_prime = jnp.dot(Ai, (jnp.atleast_2d(beta) + b)) # + jnp.atleast_2d(beta_o)
         log10_rho = numpyro.deterministic("log10_rho",
                                           jnp.clip(jnp.vstack([jnp.atleast_1d(log_10_rho_0), log10_rho_prime, jnp.atleast_1d(log_10_rho_last)]),
                                                   -15, -4))
@@ -539,18 +529,27 @@ def create_rn_pta_model(psrs, n_rn_frequencies, cond=1e-5, array=False):
     return model, gl
 
 
-def create_pta_model_plrn_fsgw(psrs, n_rn_frequencies, outliers=False, cond=1e-5):
+def create_pta_model_plrn_fsgw(psrs, n_rn_frequencies, outliers=False, cond=1e-5, tnequad=False, array=True):
     Tspan = ds.getspan(psrs)
     npsrs = len(psrs)
     # create PTA model
-    gl = ds.GlobalLikelihood([ds.PulsarLikelihood([psrs[ii].residuals,
-                            ds.makenoise_measurement(psrs[ii], psrs[ii].noisedict),
+    if array:
+        gl = ds.ArrayLikelihood((ds.PulsarLikelihood([psr.residuals,
+                                                    ds.makenoise_measurement(psr, psr.noisedict, tnequad=tnequad),
+                                                    ds.makegp_ecorr(psr, psr.noisedict),
+                                                    ds.makegp_timing(psr, svd=True, constant=1e-6)]) for psr in psrs),
+                              ds.makecommongp_fourier(psrs, ds.makefreespectrum_crn(n_rn_frequencies),
+                                                 components={'log10_rho': n_rn_frequencies, 'crn_log10_rho': n_rn_frequencies},
+                                                 T=Tspan, name='red_noise', common=['crn_log10_rho']))
+    else:
+        gl = ds.GlobalLikelihood([ds.PulsarLikelihood([psrs[ii].residuals,
+                            ds.makenoise_measurement(psrs[ii], psrs[ii].noisedict, tnequad=tnequad),
                             ds.makegp_ecorr(psrs[ii], psrs[ii].noisedict),
                             ds.makegp_timing(psrs[ii]),
-                            ds.makegp_fourier(psrs[ii], ds.powerlaw, n_rn_frequencies, T=Tspan, name='red_noise'),
+                            ds.makegp_fourier(psrs[ii], ds.freespectrum, n_rn_frequencies, T=Tspan, name='red_noise'),
                             ds.makegp_fourier(psrs[ii], ds.freespectrum, n_rn_frequencies, T=Tspan, name='gw', common=['gw_log10_rho'])
                             ]) for ii in range(len(psrs))])
-
+    logL = transformations.simple_dict_transformation(gl.logL)
     def model(prior_dict=PRIOR_DICT, rng_key=None):
         """numpyro model
 
@@ -569,10 +568,10 @@ def create_pta_model_plrn_fsgw(psrs, n_rn_frequencies, outliers=False, cond=1e-5
         resdict_gamma = {f'{psr.name}_red_noise_gamma': gamma_rn[ii] for ii, psr in enumerate(psrs)}
         resdict = {**resdict_log10_A, **resdict_gamma}
         resdict[f'gw_log10_rho({n_rn_frequencies})'] = log10_rho_gw
-        numpyro.factor("ll", gl.logL(resdict))
+        numpyro.factor("ll", logL(log10_rho.T))
     return model, gl
 
-def create_pta_model_plrn_plgw(psrs, n_rn_frequencies, outliers=False, cond=1e-5):
+def create_pta_model_plrn_plgw(psrs, n_rn_frequencies, outliers=False, cond=1e-5, tnequad=False):
     Tspan = ds.getspan(psrs)
     npsrs = len(psrs)
     # create PTA model
@@ -584,7 +583,7 @@ def create_pta_model_plrn_plgw(psrs, n_rn_frequencies, outliers=False, cond=1e-5
     #                         ds.makegp_fourier(psrs[ii], ds.powerlaw, n_rn_frequencies, T=Tspan, name='gw', common=['gw_log10_A', 'gw_gamma'])
     #                         ]) for ii in range(len(psrs))])
     gl = ds.ArrayLikelihood((ds.PulsarLikelihood([psr.residuals,
-                                                ds.makenoise_measurement(psr, psr.noisedict),
+                                                ds.makenoise_measurement(psr, psr.noisedict, tnequad=tnequad),
                                                 ds.makegp_ecorr(psr, psr.noisedict),
                                                 ds.makegp_timing(psr, svd=True, constant=1e-6)]) for psr in psrs),
                             ds.makecommongp_fourier(psrs, ds.makepowerlaw_crn(30), 30, T=Tspan, common=['crn_log10_A', 'crn_gamma'], name='red_noise', vector=False))
@@ -607,6 +606,6 @@ def create_pta_model_plrn_plgw(psrs, n_rn_frequencies, outliers=False, cond=1e-5
         # rn A and Gamma
         log10_A_rn = numpyro.sample("log10_A_rn", dist.Uniform(-20, -11).expand([npsrs+1]), rng_key=rng_key)
         gamma_rn = numpyro.sample("log10_gamma_rn", dist.Uniform(0, 7).expand([npsrs+1]), rng_key=rng_key)
-        params = jnp.atleast_2d(jnp.array([[g, a] for g,a in zip(gamma_rn, log10_A_rn)]).flatten())
+        params = jnp.atleast_2d(jnp.array([[g, a] for g,a in zip(gamma_rn, log10_A_rn)]).flatten()).T
         numpyro.factor("ll", logL(params))
     return model, gl

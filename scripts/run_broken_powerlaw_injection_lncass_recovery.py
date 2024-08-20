@@ -89,7 +89,7 @@ def run(params):
     progress_bar=True,chain_method='vectorized')
     
 
-    prior_dict = {**PRIOR_DICT, 'sigma_lambda':dist.Uniform(14.999, 15.001), 'mu_lambda': dist.Uniform(-50, 50)}
+    prior_dict = {**PRIOR_DICT, 'sigma_lambda':dist.Uniform(14.999, 15.001), 'mu_lambda': dist.Uniform(-50, 50), 'tau': dist.Uniform(4.999, 5.001)}
 
     lncass_outliers_sampler.run(jax.random.PRNGKey(0), prior_dict=prior_dict)
     

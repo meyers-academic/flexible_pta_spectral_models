@@ -34,7 +34,7 @@ argparser.add_argument("--npoints-warmup", type=int, default=1000)
 argparser.add_argument("--num-rn-frequencies", type=int, default=30)
 argparser.add_argument("--num-dm-frequencies", type=int, default=30)
 argparser.add_argument("--max-tree-depth", type=int, default=10)
-argparser.add_argument("--target-accept-prob", type=float, default=0.95)
+argparser.add_argument("--target-accept-prob", type=float, default=0.99)
 argparser.add_argument("--results-directory", type=str, default="../results")
 argparser.add_argument("--tnequad", default=False, action='store_true')
 argparser.add_argument("--run-name", type=str, default="dm_recovery")
@@ -71,7 +71,7 @@ def run(params):
     progress_bar=True,chain_method='vectorized')
     
 
-    prior_dict = {**PRIOR_DICT, 'sigma_lambda':dist.Uniform(14.999, 15.001), 'mu_lambda': dist.Uniform(-50, 50)}
+    prior_dict = {**PRIOR_DICT, 'sigma_lambda':dist.Uniform(14.999, 15.001), 'mu_lambda': dist.Uniform(-100, 100)}
 
     lncass_outliers_sampler.run(jax.random.PRNGKey(0), prior_dict=prior_dict)
     

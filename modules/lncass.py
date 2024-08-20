@@ -45,14 +45,14 @@ def sample_lncass_single_psr_alt(npoints, rng_key=None,
 def setup_javier_sampling_method(spread):
 
     def u_to_beta(u, alpha):
-        if alpha < 0.5:
-            alpha = 1-alpha
-        if u < alpha / 2:
-            beta = -spread / (alpha / 2) * u + spread
-        elif u > alpha / 2 and u < (1-alpha / 2):
-            beta = 0
-        elif u > (1 - alpha / 2):
-            beta = -spread / (alpha / 2) * u + spread * (2/alpha - 1)
+        if u == 0:
+            beta = 1
+        elif u <= alpha / 2:
+            beta = 1 - u  / alpha
+        elif u > alpha / 2 and u < (1-(alpha / 2)):
+            beta = 0.5
+        elif u >= (1 - (alpha / 2)):
+            beta = (1 - u) / alpha
         return beta
 
     # jax version of u_to_beta using jax.lax.cond that doesn't use anonymous functions
@@ -63,7 +63,7 @@ def setup_javier_sampling_method(spread):
     uvals = np.zeros_like(beta_vals)
     for ii, u in enumerate(np.linspace(0, 1, N_uvals)):
         for jj, alpha in enumerate(np.linspace(0, 1, N_alphas)):
-            beta = u_to_beta(u, alpha)
+            beta = u_to_beta(u, alpha) * (2 * spread) - spread
             beta_vals[ii, jj] = beta
             alphas[ii,jj] = alpha
             uvals[ii,jj] = u
@@ -74,12 +74,12 @@ def setup_javier_sampling_method(spread):
     return alphas, uvals, heights
 
 # TODO: fix this. sets prior from -5 to 5, should probably be tunable.
-alphas, uvals, heights = setup_javier_sampling_method(5)
+alphas, uvals, heights = setup_javier_sampling_method(20)
 
 
 def sample_lncass_single_psr_javier_method(npoints, rng_key=None, tag='', prior_dict=PRIOR_DICT):
-    # alpha = numpyro.sample(f'alpha{tag}', dist.Uniform(0, 1), rng_key=rng_key)
-    alpha = 0.1
+    alpha = numpyro.sample(f'alpha{tag}', dist.Uniform(0, 1), rng_key=rng_key)
+    # alpha = 0.1
     u = numpyro.sample(f'u{tag}', dist.Uniform(0, 1).expand([npoints]), rng_key=rng_key)
     beta = numpyro.deterministic(f'beta{tag}',interp2d(alpha*jnp.ones(npoints), u, alphas, uvals, heights.T))
     return beta
